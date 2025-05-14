@@ -1,7 +1,7 @@
 # Discord-Server-Cloner
-Discord selfbot to fully clone a server's structure from one guild to another.
-At startup it optionally deletes channels, categories, roles, and emojis in the destination guild.
-You can skip any step via interactive prompts.
+##Discord selfbot to fully clone a server's structure from one guild to another.
+##At startup it optionally deletes channels, categories, roles, and emojis in the destination guild.
+##You can skip any step via interactive prompts.
 It then optionally copies:
   • server name & description
   • server icon, banner, splash
@@ -10,5 +10,7 @@ It then optionally copies:
   • categories & text/voice channels (including NSFW, topic, slowmode, bitrate, user limit)
   • channel & category permission overwrites
 
-After each major section, the bot waits 10 seconds.
-Selfbots violate Discord ToS – use at your own risk!
+##After each major section, the bot waits 10 seconds.
+##Selfbots violate Discord ToS – use at your own risk!
+
+## using ```pip install discord.py-self```
