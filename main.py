@@ -41,7 +41,7 @@ try:
 except:
     intents = None
     use_intents = False
-    print("⚠️ No Intents support, using fallback")
+
 
 # --- Inputs ---
 TOKEN        = input("🔑 Discord user token: ").strip()
