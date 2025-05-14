@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Discord selfbot to clone a server’s structure from one guild to another.
-Interactive prompts: 'y' to perform each step, 'n' to skip.
-Global rate-limit back-off, with:
-  • OP_DELAY between most API calls
-  • CHANNEL_DELAY between channel/category ops (faster)
-50 emoji uploads/hour enforced by prompt note and manual pacing.
-"""
 
 import discord
 import asyncio
@@ -49,6 +41,7 @@ try:
 except:
     intents = None
     use_intents = False
+    print("⚠️ No Intents support, using fallback")
 
 # --- Inputs ---
 TOKEN        = input("🔑 Discord user token: ").strip()
@@ -122,7 +115,7 @@ async def on_ready():
             description=getattr(src,"description",None),
             icon=icon, banner=banner, splash=splash
         )
-        print(f"   ✔️ Name & assets updated")
+        print(f"✔️ Name & assets updated")
         await pause()
         await section_pause()
 
@@ -152,7 +145,7 @@ async def on_ready():
             if created:
                 await safe_api_call(created.edit, position=role.position)
                 new_roles[role.id] = created
-                print(f"✔️ Created")
+                print(f"✔️ Created role: {role.name}")
             await pause()
         await section_pause()
 
@@ -171,7 +164,7 @@ async def on_ready():
             img = await (emoji.read() if hasattr(emoji,"read") else (await (await aiohttp.ClientSession().get(str(emoji.url))).read()))
             try:
                 await dst.create_custom_emoji(name=emoji.name, image=img)
-                print("✔️ Uploaded")
+                print(f"✔️ Uploaded emoji: {emoji.name}")
             except HTTPException as e:
                 if e.status == 429:
                     print("⚠️ Hit emoji rate limit—skipping to next section.")
@@ -212,7 +205,7 @@ async def on_ready():
             )
             if created:
                 new_cats[cat.id] = created
-                print("✔️ Created")
+                print(f"✔️ Created category: {cat.name}")
             await chan_pause()
 
         # recreate channels
@@ -236,10 +229,10 @@ async def on_ready():
             if parent:
                 fn = dst.create_text_channel if isinstance(ch,discord.TextChannel) else dst.create_voice_channel
                 await safe_api_call(fn, category=parent, **kwargs)
-                print("✔️ Created in category")
+                print(f"✔️ Created channel in category: {ch.name}")
             else:
                 uncategorized.append((ch,kwargs))
-                print("ℹ️ Queued top-level")
+                print(f"ℹ️ Queued top-level: {ch.name}")
             await chan_pause()
 
         # top-level channels
@@ -247,7 +240,7 @@ async def on_ready():
             print(f"Creating top-level '{ch.name}'")
             fn = dst.create_text_channel if isinstance(ch,discord.TextChannel) else dst.create_voice_channel
             await safe_api_call(fn, **kwargs)
-            print("✔️ Created top-level")
+            print(f"✔️ Created top-level channel: {ch.name}")
             await chan_pause()
 
         await section_pause()
