@@ -15,5 +15,4 @@ A simple Python script to clone one server’s structure into another, with opti
 - **Rate-limit safety:** 10 s pause after each major section, longer pauses on emojis
 ## Installation
 
-```bash
-pip install -U discord.py-self aiohttp
+
