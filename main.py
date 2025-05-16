@@ -144,11 +144,14 @@ async def on_ready():
 
         new_cats = {}
         for cat in sorted(src.categories, key=lambda c: c.position):
-            ow = {
-                role_map[tgt.id]: perms
-                for tgt, perms in cat.overwrites.items()
-                if isinstance(tgt, discord.Role) and tgt.id in role_map
-            }
+            ow = {}
+            for tgt, perms in cat.overwrites.items():
+                if isinstance(tgt, discord.Role) and tgt.id in role_map:
+                    ow[role_map[tgt.id]] = perms
+                elif isinstance(tgt, discord.Member):
+                    m = dst.get_member(tgt.id)
+                    if m:
+                        ow[m] = perms
             created = await safe_api_call(
                 dst.create_category,
                 name=cat.name,
@@ -161,33 +164,36 @@ async def on_ready():
             await asyncio.sleep(CHANNEL_DELAY)
 
         uncategorized = []
-        for ch in sorted(src.channels, key=lambda c: c.position):
-            if not isinstance(ch, (discord.TextChannel, discord.VoiceChannel)):
-                continue
-            if isinstance(ch, discord.TextChannel):
+        for src_ch in sorted(src.channels, key=lambda c: c.position):
+            if isinstance(src_ch, discord.TextChannel):
                 fn = dst.create_text_channel
                 params = {
-                    "topic": ch.topic,
-                    "nsfw": ch.nsfw,
-                    "slowmode_delay": ch.slowmode_delay
+                    "topic": src_ch.topic,
+                    "nsfw": src_ch.nsfw,
+                    "slowmode_delay": src_ch.slowmode_delay
                 }
-            else:
+            elif isinstance(src_ch, discord.VoiceChannel):
                 fn = dst.create_voice_channel
                 params = {
-                    "bitrate": min(ch.bitrate, 96000),
-                    "user_limit": ch.user_limit
+                    "bitrate": min(src_ch.bitrate, 96000),
+                    "user_limit": src_ch.user_limit
                 }
-            ow = {
-                role_map[tgt.id]: perms
-                for tgt, perms in ch.overwrites.items()
-                if isinstance(tgt, discord.Role) and tgt.id in role_map
-            }
-            kwargs = {"name": ch.name, "overwrites": ow, **params}
-            parent = new_cats.get(ch.category_id)
+            else:
+                continue
+            ow = {}
+            for tgt, perms in src_ch.overwrites.items():
+                if isinstance(tgt, discord.Role) and tgt.id in role_map:
+                    ow[role_map[tgt.id]] = perms
+                elif isinstance(tgt, discord.Member):
+                    m = dst.get_member(tgt.id)
+                    if m:
+                        ow[m] = perms
+            kwargs = {"name": src_ch.name, "overwrites": ow, **params}
+            parent = new_cats.get(src_ch.category_id)
             if parent:
                 kwargs["category"] = parent
                 await safe_api_call(fn, **kwargs)
-                print(f"{Fore.GREEN}✔️ Created channel: {ch.name}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}✔️ Created channel: {src_ch.name}{Style.RESET_ALL}")
             else:
                 uncategorized.append((fn, kwargs))
             await asyncio.sleep(CHANNEL_DELAY)
