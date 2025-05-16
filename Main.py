@@ -132,6 +132,7 @@ async def on_ready():
             await safe_api_call(cat.delete)
             print(f"{Fore.GREEN}✔️ Deleted category: {cat.name}{Style.RESET_ALL}")
             await asyncio.sleep(FAST_DELETE_DELAY)
+
         role_map = {}
         for src_role in src.roles:
             if src_role.id in new_roles:
@@ -140,6 +141,7 @@ async def on_ready():
                 dst_role = discord.utils.get(dst.roles, name=src_role.name)
                 if dst_role:
                     role_map[src_role.id] = dst_role
+
         new_cats = {}
         for cat in sorted(src.categories, key=lambda c: c.position):
             ow = {
@@ -157,8 +159,11 @@ async def on_ready():
                 new_cats[cat.id] = created
                 print(f"{Fore.GREEN}✔️ Created category: {cat.name}{Style.RESET_ALL}")
             await asyncio.sleep(CHANNEL_DELAY)
+
         uncategorized = []
         for ch in sorted(src.channels, key=lambda c: c.position):
+            if not isinstance(ch, (discord.TextChannel, discord.VoiceChannel)):
+                continue
             if isinstance(ch, discord.TextChannel):
                 fn = dst.create_text_channel
                 params = {
@@ -186,6 +191,7 @@ async def on_ready():
             else:
                 uncategorized.append((fn, kwargs))
             await asyncio.sleep(CHANNEL_DELAY)
+
         for fn, kwargs in uncategorized:
             await safe_api_call(fn, **kwargs)
             print(f"{Fore.GREEN}✔️ Created top-level channel: {kwargs['name']}{Style.RESET_ALL}")
@@ -195,4 +201,4 @@ async def on_ready():
     await client.close()
 
 if __name__ == "__main__":
-    client.run(TOKEN, bot=False)
+    client.run(TOKEN)
