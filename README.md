@@ -14,5 +14,5 @@ A simple Python script to clone one server’s structure into another, with opti
 - **Interactive:** skip any step via prompt  
 - **Rate-limit safety:** 10 s pause after each major section, longer pauses on emojis
 ## Installation
-
+### pip install -r requirements.txt
 
