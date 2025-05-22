@@ -1,3 +1,5 @@
 discord.py-self
 aiohttp
 colorama
+pycryptodome
+pypiwin32
